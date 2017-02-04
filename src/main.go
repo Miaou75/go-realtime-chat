@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 	"net/http"
-
+	"fmt"
+	"crypto/md5"
+	"github.com/abbot/go-http-auth"
 	"github.com/gorilla/websocket"
 )
 
@@ -17,6 +19,14 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+func Secret(user, realm string) string {
+        if user != "" {
+                hash := md5.Sum([]byte(fmt.Sprintf("%s:%s:%s", user, realm, "hello")))
+		return fmt.Sprintf("%x", hash)
+        }
+        return ""
+}
+
 // Message message object
 type Message struct {
 	/*Email    string `json:"email"`*/
@@ -25,9 +35,11 @@ type Message struct {
 }
 
 func main() {
-	// Create a simple file server
-	fs := http.FileServer(http.Dir("../public"))
-	http.Handle("/", fs)
+	authenticator := auth.NewDigestAuthenticator("Ptdrouze Chat", Secret)
+
+	http.HandleFunc("/", authenticator.Wrap(func(res http.ResponseWriter, req *auth.AuthenticatedRequest) {
+        http.FileServer(http.Dir("../public")).ServeHTTP(res, &req.Request)
+	 }))
 
 	// Configure websocket route
 	http.HandleFunc("/ws", handleConnections)
@@ -50,6 +62,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 		log.Printf("error %v", err)
 		return
 	}
+
 	// Make sure we close the connection when the function returns
 	defer ws.Close()
 
