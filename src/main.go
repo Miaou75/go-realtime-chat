@@ -4,42 +4,83 @@ import (
 	"log"
 	"net/http"
 	"fmt"
-	"crypto/md5"
+	"database/sql"
+	_ "github.com/lib/pq"
 	"github.com/abbot/go-http-auth"
 	"github.com/gorilla/websocket"
+)
+
+const (
+  host     = "localhost"
+  port     = 5432
+  user     = "postgres"
+  password = "Miaou"
+  dbname   = "chatdb"
 )
 
 var clients = make(map[*websocket.Conn]bool) // connected clients
 var broadcast = make(chan Message)           // broadcast channel
 
-// Configure the upgrader
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+var psqlInfo string
+var db *sql.DB
+
+func init(){
+  var err error
+  psqlInfo = fmt.Sprintf("host=%s port=%d user=%s "+
+      "password=%s dbname=%s sslmode=disable",
+      host, port, user, password, dbname)
+  db, err = sql.Open("postgres", psqlInfo)
+  checkErr(err)
+  err = db.Ping()
+  checkErr (err)
+  fmt.Println("Successfully connected to database!")
 }
 
-func Secret(user, realm string) string {
-        if user != "" {
-                hash := md5.Sum([]byte(fmt.Sprintf("%s:%s:%s", user, realm, "hello")))
-		return fmt.Sprintf("%x", hash)
-        }
-        return ""
+func checkErr(err error) {
+  if err != nil {
+      panic(err)
+  }
+}
+
+// Configure the upgrader
+var upgrader = websocket.Upgrader{
+  CheckOrigin: func(r *http.Request) bool {
+  return true
+  },
+}
+
+func Secret(db *sql.DB, user, realm string) string {
+  var (
+      username string
+      password string
+  )
+  err := db.QueryRow("select name, password from users where name = $1", user).Scan(&username, &password)
+  if err == sql.ErrNoRows {
+  fmt.Println("No row")
+  return ""
+  }
+  if err != nil {
+      log.Fatal(err)
+  }
+  return password
 }
 
 // Message message object
 type Message struct {
-	/*Email    string `json:"email"`*/
-	Username string `json:"username"`
-	Message  string `json:"message"`
+  /*Email    string `json:"email"`*/
+  Username string `json:"username"`
+  Message  string `json:"message"`
 }
 
 func main() {
-	authenticator := auth.NewDigestAuthenticator("Ptdrouze Chat", Secret)
+  defer db.Close()
+  authenticator := auth.NewBasicAuthenticator("Ptdrouze Chat", func(user, realm string) string {
+	return Secret(db, user, realm)
+  })
 
-	http.HandleFunc("/", authenticator.Wrap(func(res http.ResponseWriter, req *auth.AuthenticatedRequest) {
-        http.FileServer(http.Dir("../public")).ServeHTTP(res, &req.Request)
-	 }))
+  http.HandleFunc("/", authenticator.Wrap(func(res http.ResponseWriter, req *auth.AuthenticatedRequest) {
+  http.FileServer(http.Dir("../public")).ServeHTTP(res, &req.Request)
+  }))
 
 	// Configure websocket route
 	http.HandleFunc("/ws", handleConnections)
